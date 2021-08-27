@@ -1,4 +1,5 @@
 .vscode
+functions/.runtimeconfig.json
 
 # Logs
 logs
