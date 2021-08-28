@@ -5,6 +5,9 @@
     ],
     "source": "functions"
   },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "emulators": {
     "functions": {
       "port": 5001
@@ -14,6 +17,9 @@
     },
     "ui": {
       "enabled": true
+    },
+    "storage": {
+      "port": 5003
     }
   }
 }

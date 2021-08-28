@@ -90,7 +90,7 @@ webhooks.on(["issues.opened", "issues.closed"], ({id, name, payload}) => {
       payload.issue.title,
       body,
       payload.issue.html_url,
-      payload.repository.full_name
+      payload.repository.full_name,
   );
 });
 
@@ -104,7 +104,7 @@ webhooks.on(["issue_comment.created"], ({id, name, payload}) => {
       null,
       payload.comment.body,
       payload.comment.html_url,
-      payload.repository.full_name
+      payload.repository.full_name,
   );
 });
 
@@ -134,10 +134,10 @@ webhooks.on(
             payload.pull_request.title,
             body,
             payload.pull_request.html_url,
-            payload.repository.full_name
+            payload.repository.full_name,
         );
       }
-    }
+    },
 );
 
 webhooks.on(
@@ -171,9 +171,9 @@ webhooks.on(
           null,
           body,
           payload.review.html_url,
-          payload.repository.full_name
+          payload.repository.full_name,
       );
-    }
+    },
 );
 
 webhooks.on(
@@ -188,9 +188,9 @@ webhooks.on(
           payload.release.name,
           payload.release.body,
           payload.release.html_url,
-          payload.repository.full_name
+          payload.repository.full_name,
       );
-    }
+    },
 );
 
 webhooks.onError((event) => {
