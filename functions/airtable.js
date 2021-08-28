@@ -126,7 +126,7 @@ async function processImage(url, originalFilename, id) {
 /**
  * Make composite
  * @param {object[]} laroldData list of images in bucket to fetch
- * @returns {buffer} buffer containing composite image in PNG
+ * @return {buffer} buffer containing composite image in PNG
  */
 async function makeComposite(laroldData) {
   // ensure images are downloaded
@@ -144,18 +144,18 @@ async function makeComposite(laroldData) {
   // montage
   return new Promise((resolve, reject) => {
     localPaths.slice(0, -1)
-      .reduce((chain, localPath) => chain.montage(localPath), gm(localPaths[localPaths.length -1]))
-      .geometry(200, 200)
-      .in("-tile", "x1")
-      .toBuffer("PNG", (err, buffer) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(buffer);
-        }
-      },
-      );
-    });
+        .reduce((chain, localPath) => chain.montage(localPath), gm(localPaths[localPaths.length -1]))
+        .geometry(200, 200)
+        .in("-tile", "x1")
+        .toBuffer("PNG", (err, buffer) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(buffer);
+          }
+        },
+        );
+  });
 }
 
 /**
@@ -214,12 +214,12 @@ async function doSync() {
   functions.logger.info("Removed larolds in store", {deletedIds});
 
   // generate composite and zip
-  const zip = new JSZip()
-  zip.file("larolds.json", JSON.stringify(laroldData, null, 2))
+  const zip = new JSZip();
+  zip.file("larolds.json", JSON.stringify(laroldData, null, 2));
 
   if (laroldData.length > 0) {
     const compositeBuffer = await makeComposite(laroldData);
-    zip.file(`larolds_strip${laroldData.length}.png`, compositeBuffer, {binary: true})
+    zip.file(`larolds_strip${laroldData.length}.png`, compositeBuffer, {binary: true});
   }
 
   functions.logger.info("Done sync", {laroldData});
@@ -231,7 +231,7 @@ exports.syncLarolds = functions.runWith(runtimeOpts)
       return doSync().then((buffer) => {
         response.writeHead(200, {
           "Content-Type": "application/zip",
-          "Content-disposition": `attachment; filename=larolds.zip`,
+          "Content-disposition": "attachment; filename=larolds.zip",
         });
         response.end(buffer);
       }).catch((err) => {
