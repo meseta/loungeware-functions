@@ -2,13 +2,13 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const Airtable = require("airtable");
 const axios = require("axios");
-const gm = require('gm').subClass({imageMagick: true});
-const fs = require('fs').promises;
-var path = require('path'); ;
+const gm = require("gm").subClass({imageMagick: true});
+const fs = require("fs").promises;
+const JSZip = require("jszip");
 
 admin.initializeApp();
 const laroldStore = admin.firestore().collection("Larolds");
-const bucket = admin.storage().bucket()
+const bucket = admin.storage().bucket();
 
 Airtable.configure({
   endpointUrl: "https://api.airtable.com",
@@ -20,31 +20,40 @@ const runtimeOpts = {
   memory: "128MB",
 };
 
+/**
+ * Draws the palette used for remapping colors.
+ * @return {string} path of palette file
+ */
 async function drawPalette() {
-  const palettePath = `/tmp/palette.png`;
+  const palettePath = "/tmp/palette.png";
 
   try {
     await fs.access(palettePath);
   } catch (error) {
     await new Promise((resolve, reject) => {
       gm(2, 1, "#1A1721FF")
-        .fill("#FFC89C")
-        .drawPoint(1, 0)
-        .write(palettePath, (err, stdout) => {
-          if (err) {
-            reject(err);
-          } else {
-            functions.logger.info("Created palette file", {palettePath, stdout});
-            resolve(stdout);
-          }
-        });
+          .fill("#FFC89C")
+          .drawPoint(1, 0)
+          .write(palettePath, (err, stdout) => {
+            if (err) {
+              reject(err);
+            } else {
+              functions.logger.info("Created palette file", {palettePath, stdout});
+              resolve(stdout);
+            }
+          });
     });
   }
 
   return palettePath;
 }
 
-async function checkColors(file) {
+/**
+ * Counts the number of colors.
+ * @param {string} file path to check colors of
+ * @return {number} number of colors
+ */
+async function countColors(file) {
   return new Promise((resolve, reject) => {
     gm(file).identify("%k", (err, colors) => {
       if (err) {
@@ -52,39 +61,45 @@ async function checkColors(file) {
       } else {
         resolve(colors);
       }
-    })
+    });
   });
 }
 
+/**
+ * Process an image from a URL, and store in bucket storage.
+ * @param {string} url of where to download image from
+ * @param {string} originalFilename of image (used for file format hint)
+ * @param {string} id
+ * @return {object} warnings
+ */
 async function processImage(url, originalFilename, id) {
-  const tempFileIn = `/tmp/in_${originalFilename}`;
-  const tempFileOut = `/tmp/out_${originalFilename}`;
+  const tempFileIn = `/tmp/${id}_${originalFilename}`;
+  const tempFileOut = `/tmp/${id}.png`;
 
-  // make palette  
+  // make palette
   const palettePath = await drawPalette();
 
-
   // get file
-  const res = await axios.get(url, { responseType: "arraybuffer" });
+  const res = await axios.get(url, {responseType: "arraybuffer"});
   await fs.writeFile(tempFileIn, res.data);
 
   // check colors
-  const colors = await checkColors(tempFileIn);
-  
+  const colors = await countColors(tempFileIn);
+
   // do conversion
   await new Promise((resolve, reject) => {
     gm(tempFileIn)
-      .resize(200, 200, '>')
-      .in("-remap", palettePath)
-      .write(tempFileOut, (err, stdout) => {
-        if (err) {
-          reject(err);
-        } else {
-          functions.logger.info("Processed image", {tempFileOut, stdout});
-          resolve(stdout);
-        }
-      }
-    );
+        .resize(200, 200, ">")
+        .in("-remap", palettePath)
+        .write(tempFileOut, (err, stdout) => {
+          if (err) {
+            reject(err);
+          } else {
+            functions.logger.info("Processed image", {tempFileOut, stdout});
+            resolve(stdout);
+          }
+        },
+        );
   });
 
   // upload
@@ -98,14 +113,53 @@ async function processImage(url, originalFilename, id) {
   }
 
   await fs.unlink(tempFileIn);
-  await fs.unlink(tempFileOut);
+  // await fs.unlink(tempFileOut); // might use this for cache
 
   functions.logger.info("Uploaded image", {destination, warnings});
-  return warnings;
+  return {
+    warnings,
+    destination,
+  };
+}
+
+
+/**
+ * Make composite
+ * @param {object[]} laroldData list of images in bucket to fetch
+ * @returns {buffer} buffer containing composite image in PNG
+ */
+async function makeComposite(laroldData) {
+  // ensure images are downloaded
+  const localPaths = await Promise.all(laroldData.map(async (doc) => {
+    const localPath = `/tmp/${doc.id}.png`;
+    try {
+      await fs.access(localPath);
+    } catch (error) {
+      functions.logger.info("Downloading image", {destination: doc.destination});
+      await bucket.file(doc.destination).download({destination: localPath});
+    }
+    return localPath;
+  }));
+
+  // montage
+  return new Promise((resolve, reject) => {
+    localPaths.slice(0, -1)
+      .reduce((chain, localPath) => chain.montage(localPath), gm(localPaths[localPaths.length -1]))
+      .geometry(200, 200)
+      .in("-tile", "x1")
+      .toBuffer("PNG", (err, buffer) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(buffer);
+        }
+      },
+      );
+    });
 }
 
 /**
- *
+ * Synchronize larolds with the site
  * @return {object} Larold records
  */
 async function doSync() {
@@ -118,56 +172,68 @@ async function doSync() {
   const existingDocuments = await laroldStore.listDocuments();
   const existingData = Object.fromEntries(existingDocuments.map((doc) => [doc.id, doc.data]));
 
-  // Update IDs
-  const laroldData = {};
-  const updatedIds = (await Promise.all(records.map(async (record, idx) => {
-    const image = record.get("Image file");
-    if (image.length == 0 || record.get("Confirmed for use") != "Yes") return null;
+  // Update image
+  const laroldData = await Promise.all(records
+      .filter((record) => (record.get("Image file").length > 0 && record.get("Confirmed for use") == "Yes"))
+      .map(async (record, idx) => {
+        const image = record.get("Image file")[0];
+        const id = image.id; // use the image unique ID as id
+        const modified = record.get("Last modified");
 
-    const id = image[0].id; // use the image unique ID as id
-    const modified = record.get("Last modified");
-    const imageUrl = record.get("Image file")[0].url
-    const originalFilename = record.get("Image file")[0].filename;
-    const doc = {
-      name: record.get("Larold name"),
-      attribution: record.get("Attribution name"),
-      submitter: record.get("Submitter"),
-      imageUrl,
-      modified,
-      idx: idx+1,
-      warnings: [],
-    };
+        // Check if updated
+        let doc;
+        if (!existingData[id] || existingData[id].modified != modified) {
+          const imageUrl = image.url;
+          const {warnings, destination} = await processImage(imageUrl, image.filename, id);
+          doc = {
+            id: id,
+            name: record.get("Larold name"),
+            attribution: record.get("Attribution name"),
+            submitter: record.get("Submitter"),
+            imageUrl,
+            modified,
+            idx: idx+1,
+            warnings,
+            destination,
+          };
+          await laroldStore.doc(id).set(doc);
+        } else {
+          doc = existingData[id];
+        }
 
-    // Check if updated
-    if (!existingData[id] || existingData[id].modified != modified) {
-      const warnings = await processImage(imageUrl, originalFilename, id);
-      doc.warnings = warnings;
-      await laroldStore.doc(id).set(doc);
-    }
-    laroldData[id] = doc;
-    return id;
-  }))).filter((id) => !!id);
-
+        return doc;
+      }));
+  const updatedIds = laroldData.map((doc) => doc.id);
   functions.logger.info("Updated larolds in store", {updatedIds});
 
   // Remove old ones
-  const deletedIds = (await Promise.all(existingDocuments.map(async (doc) => {
-    if (updatedIds.includes(doc.id)) return null;
-
-    await doc.delete();
-    return doc.id;
-  }))).filter((id) => !!id);
+  const deleteDocs = existingDocuments.filter((doc) => !updatedIds.includes(doc.id));
+  const deletedIds = deleteDocs.map((doc) => doc.id);
+  await Promise.all(deleteDocs.map((doc) => doc.delete()));
 
   functions.logger.info("Removed larolds in store", {deletedIds});
 
-  return laroldData;
+  // generate composite and zip
+  const zip = new JSZip()
+  zip.file("larolds.json", JSON.stringify(laroldData, null, 2))
+
+  if (laroldData.length > 0) {
+    const compositeBuffer = await makeComposite(laroldData);
+    zip.file(`larolds_strip${laroldData.length}.png`, compositeBuffer, {binary: true})
+  }
+
+  functions.logger.info("Done sync", {laroldData});
+  return zip.generateAsync({type: "nodebuffer"});
 }
 
 exports.syncLarolds = functions.runWith(runtimeOpts)
     .https.onRequest((request, response) => {
-      return doSync().then((laroldData) => {
-        functions.logger.info("Done sync", {laroldData});
-        response.status(200).json(laroldData);
+      return doSync().then((buffer) => {
+        response.writeHead(200, {
+          "Content-Type": "application/zip",
+          "Content-disposition": `attachment; filename=larolds.zip`,
+        });
+        response.end(buffer);
       }).catch((err) => {
         functions.logger.error(err);
         response.status(500).send("Sync failed");
