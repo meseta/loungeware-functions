@@ -5,6 +5,7 @@ const axios = require("axios");
 const gm = require("gm").subClass({imageMagick: true});
 const fs = require("fs").promises;
 const JSZip = require("jszip");
+const Mutex = require("async-mutex").Mutex;
 
 admin.initializeApp();
 const laroldStore = admin.firestore().collection("Larolds");
@@ -17,8 +18,10 @@ Airtable.configure({
 const base = Airtable.base(functions.config().airtable.base);
 
 const runtimeOpts = {
-  memory: "128MB",
+  memory: "512MB",
 };
+
+const paletteMutex = new Mutex();
 
 /**
  * Draws the palette used for remapping colors.
@@ -27,23 +30,25 @@ const runtimeOpts = {
 async function drawPalette() {
   const palettePath = "/tmp/palette.png";
 
-  try {
-    await fs.access(palettePath);
-  } catch (error) {
-    await new Promise((resolve, reject) => {
-      gm(2, 1, "#1A1721FF")
-          .fill("#FFC89C")
-          .drawPoint(1, 0)
-          .write(palettePath, (err, stdout) => {
-            if (err) {
-              reject(err);
-            } else {
-              functions.logger.info("Created palette file", {palettePath, stdout});
-              resolve(stdout);
-            }
-          });
-    });
-  }
+  await paletteMutex.runExclusive(async () => {
+    try {
+      await fs.access(palettePath);
+    } catch (error) {
+      await new Promise((resolve, reject) => {
+        gm(2, 1, "#1A1721FF")
+            .fill("#FFC89C")
+            .drawPoint(1, 0)
+            .write(palettePath, (err, stdout) => {
+              if (err) {
+                reject(err);
+              } else {
+                functions.logger.info("Created palette file", {palettePath, stdout});
+                resolve(stdout);
+              }
+            });
+      });
+    }
+  });
 
   return palettePath;
 }
@@ -76,15 +81,16 @@ async function processImage(url, originalFilename, id) {
   const tempFileIn = `/tmp/${id}_${originalFilename}`;
   const tempFileOut = `/tmp/${id}.png`;
 
-  // make palette
-  const palettePath = await drawPalette();
-
   // get file
   const res = await axios.get(url, {responseType: "arraybuffer"});
   await fs.writeFile(tempFileIn, res.data);
+  functions.logger.info("Got file", {url, tempFileIn});
 
   // check colors
   const colors = await countColors(tempFileIn);
+
+  // make palette
+  const palettePath = await drawPalette();
 
   // do conversion
   await new Promise((resolve, reject) => {
@@ -109,7 +115,7 @@ async function processImage(url, originalFilename, id) {
   // assemble warnings
   const warnings = [];
   if (colors != 2) {
-    warnings.push(`Incorrect number of colors (${colors}) expeted 2`);
+    warnings.push(`Incorrect number of colors (${colors}) expected 2`);
   }
 
   await fs.unlink(tempFileIn);
