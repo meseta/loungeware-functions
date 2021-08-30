@@ -124,19 +124,22 @@ webhooks.on(
           body = `*${payload.sender.login} ${action} ${payload.pull_request.user.login}'s PR*`;
         }
       }
-      const ping = false;
+
+      let ping = false;
       if ((payload.action == "opened" || payload.action == "reopened") && payload.pull_request.base.ref == "main") {
-        sendWebhook(
-            ping,
-            payload.sender.login,
-            payload.sender.avatar_url,
-            `Pull Request #${payload.pull_request.number} by ${payload.pull_request.user.login} ${action}`,
-            payload.pull_request.title,
-            body,
-            payload.pull_request.html_url,
-            payload.repository.full_name,
-        );
+        ping = true;
       }
+
+      sendWebhook(
+          ping,
+          payload.sender.login,
+          payload.sender.avatar_url,
+          `Pull Request #${payload.pull_request.number} by ${payload.pull_request.user.login} ${action}`,
+          payload.pull_request.title,
+          body,
+          payload.pull_request.html_url,
+          payload.repository.full_name,
+      );
     },
 );
 
