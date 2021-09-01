@@ -137,7 +137,7 @@ async function processImage(url, originalFilename, id) {
 async function makeComposite(laroldData) {
   // ensure images are downloaded
   const localPaths = await Promise.all(laroldData.map(async (doc) => {
-    const localPath = `/tmp/${doc.id}.png`;
+    const localPath = `/tmp/${doc.imageUid}.png`;
     try {
       await fs.access(localPath);
     } catch (error) {
@@ -148,7 +148,7 @@ async function makeComposite(laroldData) {
   }));
 
   // montage
-  const buffer = new Promise((resolve, reject) => {
+  const buffer = await new Promise((resolve, reject) => {
     localPaths.slice(0, -1)
         .reduce((chain, localPath) => chain.montage(localPath), gm(localPaths[localPaths.length -1]))
         .geometry(200, 200)
@@ -162,6 +162,7 @@ async function makeComposite(laroldData) {
         },
         );
   });
+  functions.logger.info("Montaged images", {localPaths});
 
   // cleanup
   await Promise.all(localPaths.map((localPath) => fs.unlink(localPath)));
