@@ -8,7 +8,7 @@ const JSZip = require("jszip");
 const Mutex = require("async-mutex").Mutex;
 
 admin.initializeApp();
-const laroldStore = admin.firestore().collection("Larolds");
+const laroldStore = admin.firestore().collection("Larold");
 const bucket = admin.storage().bucket();
 
 Airtable.configure({
@@ -192,7 +192,7 @@ async function doSync() {
           const imageUrl = image.url;
           const {warnings, destination} = await processImage(imageUrl, image.filename, id);
           doc = {
-            id: id,
+            imageUid: id,
             name: record.get("Larold name"),
             attribution: record.get("Attribution name"),
             submitter: record.get("Submitter"),
