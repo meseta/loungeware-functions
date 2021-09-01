@@ -148,7 +148,7 @@ async function makeComposite(laroldData) {
   }));
 
   // montage
-  return new Promise((resolve, reject) => {
+  const buffer = new Promise((resolve, reject) => {
     localPaths.slice(0, -1)
         .reduce((chain, localPath) => chain.montage(localPath), gm(localPaths[localPaths.length -1]))
         .geometry(200, 200)
@@ -162,6 +162,11 @@ async function makeComposite(laroldData) {
         },
         );
   });
+
+  // cleanup
+  await Promise.all(localPaths.map((localPath) => fs.unlink(localPath)));
+
+  return buffer;
 }
 
 /**
