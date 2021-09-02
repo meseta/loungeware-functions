@@ -186,8 +186,11 @@ async function doSync() {
 
   // Update image
   const laroldData = await Promise.all(records
-      .filter((record) => (record.get("Image file").length > 0 && record.get("Confirmed for use") == "Yes"))
-      .map(async (record, idx) => {
+      .filter((record) => (
+        record.get("Confirmed for use") == "Yes" &&
+        record.get("Image file") &&
+        record.get("Image file").length > 0
+      )).map(async (record, idx) => {
         const image = record.get("Image file")[0];
         const id = image.id; // use the image unique ID as id
         const modified = record.get("Last modified");
