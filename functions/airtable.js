@@ -6,6 +6,7 @@ const gm = require("gm").subClass({imageMagick: true});
 const fs = require("fs").promises;
 const JSZip = require("jszip");
 const Mutex = require("async-mutex").Mutex;
+const sharp = require("sharp");
 
 admin.initializeApp();
 const laroldStore = admin.firestore().collection("Larold");
@@ -18,7 +19,8 @@ Airtable.configure({
 const base = Airtable.base(functions.config().airtable.base);
 
 const runtimeOpts = {
-  memory: "512MB",
+  memory: "2GB",
+  timeoutSeconds: 150,
 };
 
 const paletteMutex = new Mutex();
@@ -136,38 +138,39 @@ async function processImage(url, originalFilename, id) {
  */
 async function makeComposite(laroldData) {
   // ensure images are downloaded
-  const localPaths = await Promise.all(laroldData.map(async (doc) => {
-    const localPath = `/tmp/${doc.imageUid}.png`;
+  const localPaths = await Promise.all(laroldData.map(async (data) => {
+    const localPath = `/tmp/${data.imageUid}.png`;
     try {
       await fs.access(localPath);
     } catch (error) {
-      functions.logger.info("Downloading image", {destination: doc.destination});
-      await bucket.file(doc.destination).download({destination: localPath});
+      functions.logger.info("Downloading image", {destination: data.destination});
+      await bucket.file(data.destination).download({destination: localPath});
     }
     return localPath;
   }));
 
   // montage
-  const buffer = await new Promise((resolve, reject) => {
-    localPaths.slice(0, -1)
-        .reduce((chain, localPath) => chain.montage(localPath), gm(localPaths[localPaths.length -1]))
-        .geometry(200, 200)
-        .in("-tile", "x1")
-        .toBuffer("PNG", (err, buffer) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(buffer);
-          }
-        },
-        );
-  });
+  functions.logger.info("Starting montage", {localPaths});
+  const data = await sharp(localPaths[0])
+      .extend({right: 200*(localPaths.length-1)})
+      .composite(
+          localPaths.slice(1).map((localPath, idx) => {
+            return {
+              input: localPath,
+              left: (idx+1)*200,
+              top: 0,
+            };
+          }),
+      )
+      .png()
+      .toBuffer();
+
   functions.logger.info("Montaged images", {localPaths});
 
   // cleanup
   await Promise.all(localPaths.map((localPath) => fs.unlink(localPath)));
 
-  return buffer;
+  return data;
 }
 
 /**
@@ -181,8 +184,9 @@ async function doSync() {
 
   functions.logger.info("Got larolds from airtable", {count: records.length});
 
-  const existingDocuments = await laroldStore.listDocuments();
-  const existingData = Object.fromEntries(existingDocuments.map((doc) => [doc.id, doc.data]));
+  const existingDocumentsRefs = await laroldStore.listDocuments();
+  const existingDocuments = await Promise.all(existingDocumentsRefs.map((docRef) => docRef.get()));
+  const existingData = Object.fromEntries(existingDocuments.map((doc) => [doc.id, doc.data()]));
 
   // Update image
   const laroldData = await Promise.all(records
@@ -193,36 +197,36 @@ async function doSync() {
       )).map(async (record, idx) => {
         const image = record.get("Image file")[0];
         const id = image.id; // use the image unique ID as id
-        const modified = record.get("Last modified");
+        const modified = `${record.get("Last modified")}`;
 
         // Check if updated
-        let doc;
+        let data;
         if (!existingData[id] || existingData[id].modified != modified) {
           const imageUrl = image.url;
           const {warnings, destination} = await processImage(imageUrl, image.filename, id);
-          doc = {
+          data = {
             imageUid: id,
-            name: record.get("Larold name"),
-            attribution: record.get("Attribution name"),
-            submitter: record.get("Submitter"),
+            name: record.get("Larold name") || "unnamed larold",
+            attribution: record.get("Attribution name") || "anonymous",
+            submitter: record.get("Submitter") || "anonymous",
             imageUrl,
             modified,
             idx: idx+1,
             warnings,
             destination,
           };
-          await laroldStore.doc(id).set(doc);
+          await laroldStore.doc(id).set(data);
         } else {
-          doc = existingData[id];
+          data = existingData[id];
         }
 
-        return doc;
+        return data;
       }));
-  const updatedIds = laroldData.map((doc) => doc.id);
+  const updatedIds = laroldData.map((data) => data.imageUid);
   functions.logger.info("Updated larolds in store", {updatedIds});
 
   // Remove old ones
-  const deleteDocs = existingDocuments.filter((doc) => !updatedIds.includes(doc.id));
+  const deleteDocs = existingDocumentsRefs.filter((doc) => !updatedIds.includes(doc.id));
   const deletedIds = deleteDocs.map((doc) => doc.id);
   await Promise.all(deleteDocs.map((doc) => doc.delete()));
 
